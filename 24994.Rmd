@@ -1,0 +1,328 @@
+---
+title: "ST308 20% code"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# Importing necessary packages
+library(arm)
+library(ggplot2)
+library(car)
+```
+
+## Dataset
+Here the dataset is imported
+```{r cars}
+# Importing Data
+df <- read.csv("xAPI-Edu-Data.csv")
+head(df)
+```
+
+```{r}
+# Viewing the dataset
+summary(df)
+```
+
+## Data Cleaning
+Cleaning the dataset, ensuring that everything is in the right format
+```{r}
+nrow(df)
+names(df)
+class(df)
+```
+
+```{r}
+# Combining the columns to create the first level
+df$grade_class_ID <- paste(df$GradeID, df$SectionID, sep = "-")
+
+df <- subset(df, select = -c(GradeID, SectionID, StageID))
+# Removing the columns that denote their grade level as a new one was created
+```
+
+
+```{r}
+# Converting categorical variables to factors instead of str
+str(df)
+chr_cols <- sapply(df, is.character)
+df[chr_cols] <- lapply(df[chr_cols], as.factor)
+str(df)
+```
+
+## Missing Data
+```{r}
+# Proportion of missing values
+(colSums(is.na(df))/nrow(df))*100
+
+# No missing data, so we can just proceed on
+```
+
+## Creating a binary outcome variable
+```{r}
+# Simplyfing the problem from multinomial logistic regression to a binary outcome
+df$Class <- ifelse(df$Class %in% c("M", "H"), "1", df$Class)
+df$Class <- ifelse(df$Class %in% c("2"), "0", df$Class)
+
+df$Class <- as.factor(df$Class)
+table(df$Class)
+```
+
+
+## EDA
+Just some quick plots to get an initial understanding of the dataset
+```{r}
+# Plotting the multivariate outcome variable
+class_freq <- as.data.frame(table(df$Class))
+
+ggplot(class_freq, aes(x = Var1, y = Freq)) +
+  geom_bar(stat = "identity") +
+  labs(x = "Categories", y = "Frequency", title = "Bar Plot of Class Frequencies")
+```
+
+```{r}
+summary(df)
+```
+```{r}
+# Looking at the levels
+table(df$grade_class_ID)
+```
+
+# Creating the models
+
+## Logistic Regression
+
+```{r}
+# Doing an initial model with all the predictors to gave an idea of the relationships between the variables
+model_base <- glm(Class ~ ., data = df, family = binomial)
+summary(model_base)
+```
+
+```{r}
+# First model, including the behavioural related predictors
+model_1 <- glm(Class ~ raisedhands + VisITedResources
+              + AnnouncementsView + Discussion + grade_class_ID, data = df, family = binomial)
+
+summary(model_1)
+# Wee see that in using ordinary logistic regression, all of the variables relating to student behaviour are significant 
+
+library(sjPlot)
+library(sjmisc)
+library(sjlabelled)
+
+model_1 <- glm(Class ~ raisedhands + VisITedResources
+              + AnnouncementsView + Discussion, data = df, family = binomial)
+tab_model(model_1, digits = 3) # plotting nice results, calculates odds ratios
+```
+
+```{r}
+# Viewing interactions on the effect of grade_class
+model_2 <-glm(Class ~ AnnouncementsView*grade_class_ID + Discussion*grade_class_ID 
+              + grade_class_ID*raisedhands + grade_class_ID*VisITedResources, 
+              data = df, family = binomial)
+
+summary(model_2)
+
+# From initial insepction, we see no effect on the classroom/peer group the student belongs in having a signficant impact on the results. This might hold true in the multi-level regression model
+```
+
+## Ridge and lasso regression and connection with bayesian logistic regression
+```{r}
+# Lasso
+library(glmnet)
+x <- model.matrix(Class ~ raisedhands + VisITedResources + AnnouncementsView + Discussion + grade_class_ID +0, df)
+y <- df$Class
+cv <- cv.glmnet(x, y, alpha = 1, family = 'binomial')
+model_lasso <- glmnet(x, y, alpha = 1, family = 'binomial', lambda = cv$lambda.min)
+coef(model_lasso)
+```
+
+```{r}
+# Lasso all variables
+library(glmnet)
+x <- model.matrix(Class ~ . +0, df)
+y <- df$Class
+cv <- cv.glmnet(x, y, alpha = 1, family = 'binomial')
+model_lasso <- glmnet(x, y, alpha = 1, family = 'binomial', lambda = cv$lambda.min)
+coef(model_lasso)
+```
+
+```{r}
+# ridge
+library(glmnet)
+x <- model.matrix(Class ~ raisedhands + VisITedResources + AnnouncementsView + Discussion + grade_class_ID + 0, df)
+y <- df$Class
+cv <- cv.glmnet(x, y, alpha = 0, family = 'binomial')
+model_ridge <- glmnet(x, y, alpha = 0, family = 'binomial', lambda = cv$lambda.min)
+coef(model_ridge)
+```
+
+```{r}
+# Comparing with bayesian
+laplace_prior <- laplace(location = 0) # stan does not support laplace priors
+
+normal_prior <- normal(scale = 1/cv$lambda.min)
+bmod5 <- stan_glm(Class ~ raisedhands + VisITedResources
+                  + AnnouncementsView + Discussion + grade_class_ID, 
+                  data = df, 
+                  family = binomial,
+                  prior = normal_prior,
+                  prior_intercept = normal_prior)
+
+tab_model(bmod5, digits = 3)
+```
+
+```{r}
+prior_summary(bmod5, digits = 3)
+
+cred_95 <- posterior_interval(bmod5, prob = 0.95) # 95% credible interval
+round(cred_95, 3)
+```
+
+```{r}
+launch_shinystan(bmod5, ppd = FALSE)
+```
+
+## Bayesian methods: Logistic Regression
+
+```{r}
+library(rstanarm)
+```
+
+
+```{r}
+bmod1 <- stan_glm(Class ~ raisedhands + VisITedResources
+              + AnnouncementsView + Discussion + grade_class_ID, data = df, family = binomial)
+```
+
+```{r}
+prior_summary(bmod1, digits = 3)
+
+cred_95 <- posterior_interval(bmod1, prob = 0.95) # 95% credible interval
+round(cred_95, 3)
+```
+
+```{r}
+launch_shinystan(bmod1, ppd = FALSE)  
+```
+
+### Including a high variance prior
+```{r}
+# Adding a high variance prior
+high_var_prior <- student_t(df = 7, location = 0, scale = 10)
+
+# Fit Bayesian logistic regression model with high variance prior
+bmod2 <- stan_glm(Class ~ raisedhands + VisITedResources
+                  + AnnouncementsView + Discussion + grade_class_ID, 
+                  data = df, 
+                  family = binomial,
+                  prior = high_var_prior,
+                  prior_intercept = high_var_prior)
+```
+
+```{r}
+tab_model(bmod2, digits = 3) # plotting nice looking results, calculates odds ratios
+```
+
+
+```{r}
+prior_summary(bmod2, digits = 3)
+
+cred_95 <- posterior_interval(bmod2, prob = 0.95) # 95% credible interval
+round(cred_95, 3)
+```
+
+
+```{r}
+launch_shinystan(bmod2, ppd = FALSE)  
+```
+
+```{r}
+# Some sensitivity analysis 
+high_var_prior_2 <- student_t(df = 7, location = 10, scale = 20)
+
+high_var_prior <- student_t(df = 7, location = 1, scale = 10)
+
+cauchy_prior <- cauchy(location = 0, scale = 10)
+
+laplace_prior <- laplace(location = 0, scale = 10)
+
+# Trying all these priors as well, and modified the location and scale parameters
+
+bmod2.1 <- stan_glm(Class ~ raisedhands + VisITedResources
+                  + AnnouncementsView + Discussion + grade_class_ID, 
+                  data = df, 
+                  family = binomial,
+                  prior = high_var_prior_2,
+                  prior_intercept = high_var_prior_2)
+```
+
+```{r}
+prior_summary(bmod2.1, digits = 3)
+
+cred_95 <- posterior_interval(bmod2.1, prob = 0.95) # 95% credible interval
+round(cred_95, 3)
+```
+
+### Including interactions
+```{r}
+high_var_prior <- student_t(df = 7, location = 0, scale = 10)
+
+bmod3 <- stan_glm(Class ~ raisedhands*grade_class_ID + VisITedResources*grade_class_ID
+                  + AnnouncementsView*grade_class_ID + Discussion*grade_class_ID, 
+                  data = df, 
+                  family = binomial,
+                  prior = high_var_prior,
+                  prior_intercept = high_var_prior)
+```
+
+
+```{r}
+prior_summary(bmod3, digits = 3)
+
+cred_95 <- posterior_interval(bmod3, prob = 0.95) # 95% credible interval
+round(cred_95, 3)
+```
+
+
+```{r}
+launch_shinystan(bmod3, ppd = FALSE)  
+```
+
+# Multi-level
+
+```{r}
+# Due to computational limits, and also convergence issues (divergence) when random slopes are included
+
+# Decided to simplify the model for interpretability, a possible limitation
+
+bhmod1 <- stan_glmer(
+  Class ~  Discussion + raisedhands + VisITedResources +
+    AnnouncementsView + (1 | grade_class_ID),
+  data = df, family = binomial#,
+  #prior = high_var_prior,
+  #prior_intercept = high_var_prior
+  )
+```
+
+```{r}
+bhmod1
+prior_summary(bhmod1)
+
+cred_95 <- posterior_interval(bhmod1, prob = 0.95) # 95% credible interval
+round(cred_95, 3)
+```
+
+```{r}
+launch_shinystan(bhmod1, ppd = FALSE)
+```
+
+```{r}
+tab_model(bhmod1, digits = 3) # plotting results, calculating odds ratios
+```
+
+
+
+
